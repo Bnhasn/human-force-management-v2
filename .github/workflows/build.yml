@@ -26,8 +26,7 @@ jobs:
 
       - name: البحث عن ملف الإصلاح المحسن واستخراجه
         run: |
-          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' -print | grep 'إصلاح-الطباعة' | grep 'المحس' | head -n 1 || true)"
-
+          ZIP_FILE="./نظام-إدارة-القوة-البشرية-إصلاح-الطباعة-الإصدار-الجديد.zip"
           if [ -z "$ZIP_FILE" ]; then
             echo "خطأ: لم يتم العثور على ملف ZIP المحسن لإصلاح الطباعة."
             exit 1
