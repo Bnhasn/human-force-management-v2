@@ -57,7 +57,7 @@ jobs:
         run: |
           cat > capacitor.config.json <<'EOF'
           {
-            "appId": "com.humanforce.management",
+            "appId": "com.humanforce.management.printfix",
             "appName": "إدارة القوى العاملة البشرية",
             "webDir": "dist"
           }
