@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "**.zip"
       - ".github/workflows/build.yml"
 
 jobs:
@@ -19,18 +19,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: ""
 
       - name: Find and extract updated project
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -name '*إصلاح-الطباعة.zip' -print -quit)
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "Updated ZIP file not found"
+            echo "ERROR: Updated project ZIP was not found."
             exit 1
           fi
+
           mkdir app
           unzip -q "$ZIP_FILE" -d app
-          test -f app/package.json
+
+          if [ ! -f app/package.json ]; then
+            echo "ERROR: package.json was not found."
+            exit 1
+          fi
 
       - name: Install project dependencies
         working-directory: app
@@ -41,6 +46,7 @@ jobs:
         run: |
           npm install @capacitor/core@7 @capacitor/android@7
           npm install --save-dev @capacitor/cli@7
+
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.humanforce.management",
@@ -65,7 +71,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Build APK
         working-directory: app/android
