@@ -1,0 +1,81 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: ""
+
+      - name: Find and extract updated project
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*إصلاح-الطباعة.zip' -print -quit)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Updated ZIP file not found"
+            exit 1
+          fi
+          mkdir app
+          unzip -q "$ZIP_FILE" -d app
+          test -f app/package.json
+
+      - name: Install project dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Configure Capacitor
+        working-directory: app
+        run: |
+          npm install @capacitor/core@7 @capacitor/android@7
+          npm install --save-dev @capacitor/cli@7
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.humanforce.management",
+            "appName": "Human Force Management",
+            "webDir": "dist"
+          }
+          EOF
+
+      - name: Build web application
+        working-directory: app
+        run: npm run build
+
+      - name: Generate Android project
+        working-directory: app
+        run: npx cap add android
+
+      - name: Sync Android project
+        working-directory: app
+        run: npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build APK
+        working-directory: app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Human-Force-Management-APK
+          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
