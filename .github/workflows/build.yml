@@ -1,87 +1,96 @@
-name: Build Android APK
+name: إنشاء ملف APK لنظام Android
 
 on:
-  workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
-      - "**.zip"
+      - "*.zip"
       - ".github/workflows/build.yml"
+
+  workflow_dispatch:
 
 jobs:
   build-android:
+    name: استخراج المشروع وبناؤه
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: تنزيل ملفات المستودع
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: إعداد Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Find and extract updated project
+      - name: البحث عن ملف الإصلاح المحسن واستخراجه
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*إصلاح-الطباعة.zip' -print -quit)
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' -print | grep 'إصلاح-الطباعة' | grep 'المحس' | head -n 1 || true)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Updated project ZIP was not found."
+            echo "خطأ: لم يتم العثور على ملف ZIP المحسن لإصلاح الطباعة."
             exit 1
           fi
 
-          mkdir app
+          echo "سيتم استخدام الملف: $ZIP_FILE"
+
+          mkdir -p app
           unzip -q "$ZIP_FILE" -d app
 
           if [ ! -f app/package.json ]; then
-            echo "ERROR: package.json was not found."
+            echo "خطأ: لم يتم العثور على package.json داخل المشروع."
             exit 1
           fi
 
-      - name: Install project dependencies
+      - name: تثبيت تبعيات المشروع
         working-directory: app
         run: npm install
 
-      - name: Configure Capacitor
+      - name: تثبيت مكتبات Capacitor
         working-directory: app
         run: |
           npm install @capacitor/core@7 @capacitor/android@7
           npm install --save-dev @capacitor/cli@7
 
+      - name: إعداد تكوين التطبيق
+        working-directory: app
+        run: |
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "com.humanforce.management",
-            "appName": "Human Force Management",
+            "appName": "إدارة القوى العاملة البشرية",
             "webDir": "dist"
           }
           EOF
 
-      - name: Build web application
+      - name: بناء تطبيق الويب
         working-directory: app
         run: npm run build
 
-      - name: Generate Android project
+      - name: إنشاء مشروع Android
         working-directory: app
         run: npx cap add android
 
-      - name: Sync Android project
+      - name: مزامنة مشروع Android
         working-directory: app
         run: npx cap sync android
 
-      - name: Setup Java
+      - name: إعداد Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
-      - name: Build APK
+      - name: إنشاء ملف APK
         working-directory: app/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: تحميل ملف APK
         uses: actions/upload-artifact@v4
         with:
           name: Human-Force-Management-APK
           path: app/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          retention-days: 7
