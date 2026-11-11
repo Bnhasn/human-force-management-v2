@@ -1,4 +1,3 @@
-
 name: Build Windows EXE
 
 on:
@@ -15,20 +14,20 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Download workflow files only
+      - name: Checkout workflow file only
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            .github/workflows
-          sparse-checkout-cone-mode: true
+            .github/workflows/build.yml
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
 
-      - name: Enable long paths
+      - name: Enable Git long paths
         shell: pwsh
         run: |
           git config --global core.longpaths true
 
-      - name: Find and download project ZIP
+      - name: Download original project ZIP
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,41 +36,48 @@ jobs:
 
           $match = [regex]::Match(
             $workflow,
-            '(?m)^\s*ZIP_FILE\s*=\s*["'']?(.+?\.zip)["'']?\s*$'
+            '(?m)^\s*ZIP_FILE\s*=\s*["'']?([^"''\r\n]+?\.zip)["'']?\s*$'
           )
 
           if (-not $match.Success) {
-            throw "Could not find ZIP_FILE in build.yml"
+            throw "ZIP_FILE was not found in build.yml"
           }
 
           $zipPath = $match.Groups[1].Value.Trim()
-          Write-Host "Project ZIP: $zipPath"
+
+          Write-Host "Selected ZIP: $zipPath"
 
           $encodedPath = (
             $zipPath -split '/' |
-            ForEach-Object { [uri]::EscapeDataString($_) }
+            ForEach-Object {
+              [uri]::EscapeDataString($_)
+            }
           ) -join '/'
 
-          $apiUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/contents/$encodedPath?ref=$env:GITHUB_SHA"
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/contents/$encodedPath"
+
+          $url += "?ref=$env:GITHUB_SHA"
 
           $headers = @{
             Authorization = "Bearer $env:GH_TOKEN"
-            Accept = "application/vnd.github+json"
+            Accept = "application/vnd.github.raw"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
 
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          Invoke-WebRequest `
+            -Uri $url `
+            -Headers $headers `
+            -OutFile project.zip
 
-          $bytes = [Convert]::FromBase64String(
-            ($response.content -replace '\s', '')
-          )
+          if (!(Test-Path project.zip)) {
+            throw "Project ZIP download failed."
+          }
 
-          [System.IO.File]::WriteAllBytes(
-            "$env:GITHUB_WORKSPACE\project.zip",
-            $bytes
-          )
+          if ((Get-Item project.zip).Length -lt 100000) {
+            throw "Downloaded ZIP is unexpectedly small."
+          }
 
-          Write-Host "ZIP downloaded successfully."
+          Write-Host "Project ZIP downloaded successfully."
 
       - name: Extract project
         shell: pwsh
@@ -84,7 +90,7 @@ jobs:
             -Force
 
           if (!(Test-Path "app/package.json")) {
-            throw "package.json was not found."
+            throw "package.json was not found at the ZIP root."
           }
 
       - name: Setup Node.js
@@ -97,6 +103,7 @@ jobs:
         shell: pwsh
         run: |
           npm install --no-audit --no-fund
+
           npm install --no-save --no-audit --no-fund electron electron-builder
 
       - name: Configure Electron
@@ -166,7 +173,9 @@ jobs:
               }
 
               try {
-                return await net.fetch(pathToFileURL(filePath).toString());
+                return await net.fetch(
+                  pathToFileURL(filePath).toString()
+                );
               } catch {
                 return new Response('File not found', { status: 404 });
               }
