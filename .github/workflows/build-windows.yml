@@ -1,0 +1,193 @@
+
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-windows.yml"
+      - "*.zip"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download project files
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Extract latest project ZIP
+        shell: pwsh
+        run: |
+          $zip = git log -1 --diff-filter=ACM --name-only --pretty=format: -- '*.zip' |
+            Where-Object { $_ -and $_.Trim().EndsWith('.zip') } |
+            Select-Object -First 1
+
+          if (-not $zip) {
+            throw "No project ZIP file was found."
+          }
+
+          Write-Host "Using project: $zip"
+
+          New-Item -ItemType Directory -Force -Path app | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath app -Force
+
+          if (!(Test-Path "app/package.json")) {
+            throw "package.json was not found in the project ZIP root."
+          }
+
+      - name: Install project dependencies
+        working-directory: app
+        shell: pwsh
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund electron electron-builder
+
+      - name: Configure Electron
+        working-directory: app
+        shell: pwsh
+        run: |
+          @'
+          const { app, BrowserWindow, protocol, net, shell } = require('electron');
+          const path = require('node:path');
+          const { pathToFileURL } = require('node:url');
+
+          protocol.registerSchemesAsPrivileged([{
+            scheme: 'app',
+            privileges: {
+              standard: true,
+              secure: true,
+              supportFetchAPI: true,
+              corsEnabled: true
+            }
+          }]);
+
+          app.setPath(
+            'userData',
+            path.join(app.getPath('appData'), 'HumanForceManagement')
+          );
+
+          async function createWindow() {
+            const win = new BrowserWindow({
+              width: 1400,
+              height: 900,
+              minWidth: 900,
+              minHeight: 650,
+              autoHideMenuBar: true,
+              webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true
+              }
+            });
+
+            win.webContents.setWindowOpenHandler(({ url }) => {
+              if (url.startsWith('https://') || url.startsWith('http://')) {
+                shell.openExternal(url);
+              }
+              return { action: 'deny' };
+            });
+
+            await win.loadURL('app://localhost/index.html');
+          }
+
+          app.whenReady().then(() => {
+            const distDir = path.resolve(__dirname, 'dist');
+
+            protocol.handle('app', async (request) => {
+              const pathname = decodeURIComponent(
+                new URL(request.url).pathname
+              );
+
+              const relativePath = pathname.replace(/^\/+/, '') || 'index.html';
+              const filePath = path.resolve(distDir, relativePath);
+
+              if (
+                filePath !== distDir &&
+                !filePath.startsWith(distDir + path.sep)
+              ) {
+                return new Response('Not found', { status: 404 });
+              }
+
+              try {
+                return await net.fetch(pathToFileURL(filePath).toString());
+              } catch {
+                return new Response('File not found', { status: 404 });
+              }
+            });
+
+            createWindow();
+
+            app.on('activate', () => {
+              if (BrowserWindow.getAllWindows().length === 0) {
+                createWindow();
+              }
+            });
+          });
+
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') app.quit();
+          });
+          '@ | Set-Content electron-main.cjs -Encoding utf8
+
+          @'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+
+          p.main = 'electron-main.cjs';
+
+          p.build = {
+            appId: 'com.humanforce.management.printfix',
+            productName: 'Human Force Management',
+            directories: {
+              output: 'release'
+            },
+            files: [
+              'dist/**/*',
+              'electron-main.cjs',
+              'package.json'
+            ],
+            win: {
+              target: [
+                {
+                  target: 'nsis',
+                  arch: ['x64']
+                }
+              ]
+            },
+            nsis: {
+              oneClick: false,
+              allowToChangeInstallationDirectory: true,
+              createDesktopShortcut: true,
+              createStartMenuShortcut: true
+            },
+            artifactName: 'Human-Force-Management-Setup-${version}.${ext}'
+          };
+
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2));
+          '@ | node -
+
+      - name: Build web application
+        working-directory: app
+        run: npm run build
+
+      - name: Build Windows installer
+        working-directory: app
+        run: npx electron-builder --win nsis --x64
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Human-Force-Management-Windows
+          path: app/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
+          
