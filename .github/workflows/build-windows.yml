@@ -6,7 +6,6 @@ on:
   push:
     paths:
       - ".github/workflows/build-windows.yml"
-      - "*.zip"
 
 permissions:
   contents: read
@@ -16,35 +15,84 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Download project files
+      - name: Download workflow files only
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows
+          sparse-checkout-cone-mode: true
+          fetch-depth: 1
+
+      - name: Enable long paths
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+
+      - name: Find and download project ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $workflow = Get-Content ".github/workflows/build.yml" -Raw
+
+          $match = [regex]::Match(
+            $workflow,
+            '(?m)^\s*ZIP_FILE\s*=\s*["'']?(.+?\.zip)["'']?\s*$'
+          )
+
+          if (-not $match.Success) {
+            throw "Could not find ZIP_FILE in build.yml"
+          }
+
+          $zipPath = $match.Groups[1].Value.Trim()
+          Write-Host "Project ZIP: $zipPath"
+
+          $encodedPath = (
+            $zipPath -split '/' |
+            ForEach-Object { [uri]::EscapeDataString($_) }
+          ) -join '/'
+
+          $apiUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/contents/$encodedPath?ref=$env:GITHUB_SHA"
+
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+
+          $bytes = [Convert]::FromBase64String(
+            ($response.content -replace '\s', '')
+          )
+
+          [System.IO.File]::WriteAllBytes(
+            "$env:GITHUB_WORKSPACE\project.zip",
+            $bytes
+          )
+
+          Write-Host "ZIP downloaded successfully."
+
+      - name: Extract project
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path app | Out-Null
+
+          Expand-Archive `
+            -LiteralPath project.zip `
+            -DestinationPath app `
+            -Force
+
+          if (!(Test-Path "app/package.json")) {
+            throw "package.json was not found."
+          }
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Extract latest project ZIP
-        shell: pwsh
-        run: |
-          $zip = git log -1 --diff-filter=ACM --name-only --pretty=format: -- '*.zip' |
-            Where-Object { $_ -and $_.Trim().EndsWith('.zip') } |
-            Select-Object -First 1
-
-          if (-not $zip) {
-            throw "No project ZIP file was found."
-          }
-
-          Write-Host "Using project: $zip"
-
-          New-Item -ItemType Directory -Force -Path app | Out-Null
-          Expand-Archive -LiteralPath $zip -DestinationPath app -Force
-
-          if (!(Test-Path "app/package.json")) {
-            throw "package.json was not found in the project ZIP root."
-          }
-
-      - name: Install project dependencies
+      - name: Install dependencies
         working-directory: app
         shell: pwsh
         run: |
@@ -156,12 +204,10 @@ jobs:
               'package.json'
             ],
             win: {
-              target: [
-                {
-                  target: 'nsis',
-                  arch: ['x64']
-                }
-              ]
+              target: [{
+                target: 'nsis',
+                arch: ['x64']
+              }]
             },
             nsis: {
               oneClick: false,
